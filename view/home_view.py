@@ -1,6 +1,8 @@
 import flet as ft
 import threading
+import os
 from service.launcher_service import LauncherService
+from model.dao.instance_dao import InstanceDAO
 
 class HomeView(ft.Container):
     def __init__(self, page: ft.Page):
@@ -9,22 +11,43 @@ class HomeView(ft.Container):
         self.launcher_service = LauncherService()
         self.expand = True
         self.padding = 20
+        self.instance_dao = InstanceDAO()
+        self.username = "IKERO90"
         
-        self.status_text = ft.Text("Selecciona la Instancia.", size=12, color=ft.Colors.WHITE54)
+        # Obtenemos datos directamente del DAO sin pasar sesiones externas
+        self.selected_instance = getattr(self.instance_dao, "get_selected_instance", lambda: None)()
+        
+        if not self.selected_instance:
+            all_instances = InstanceDAO.get_all()
+            self.selected_instance = all_instances[0] if all_instances else None
+
+        inst_name = self.selected_instance.name if self.selected_instance else "Ninguna instancia seleccionada"
+        self.status_text = ft.Text(f"Instancia activa: {inst_name}", size=12, color=ft.Colors.WHITE54)
+
+        instances_list = InstanceDAO.get_all()
+        dropdown_options = []
+        default_value = "1.20"
+
+        if instances_list:
+            for inst in instances_list:
+                display_label = f"{inst.name} ({inst.minecraft_version})"
+                dropdown_options.append(ft.dropdown.Option(text=display_label, key=str(inst.id)))
+            
+            if self.selected_instance:
+                default_value = str(self.selected_instance.id)
+        else:
+            dropdown_options.append(ft.dropdown.Option("1.20", "1.20 (Vanilla por defecto)"))
 
         self.version_dropdown = ft.Dropdown(
-            label="Versión",
+            label="Instancia / Versión",
             border_color="#334155",
             focused_border_color="#22c55e",
             text_style=ft.TextStyle(color=ft.Colors.WHITE, size=13),
             label_style=ft.TextStyle(color=ft.Colors.WHITE70, size=12),
-            options=[
-                ft.dropdown.Option("1.20"),
-                ft.dropdown.Option("1.20.1 - World of Mithral"),
-                ft.dropdown.Option("1.19.2 - Nightmares Arrival"),
-            ],
-            value="1.20",  # Predeterminado en 1.20 como solicitaste
+            options=dropdown_options,
+            value=default_value,
             dense=True,
+            on_change=self.on_instance_changed
         )
 
         self.play_button = ft.ElevatedButton(
@@ -88,21 +111,53 @@ class HomeView(ft.Container):
         )
 
     def update_status(self, mensaje: str):
-        """Callback seguro para actualizar los textos desde el servicio."""
         self.status_text.value = mensaje
-        self.page.update()
+        try:
+            self.page.update()
+        except Exception:
+            if self.page:
+                self.page.update()
+
+    def on_instance_changed(self, e):
+        selected_id = self.version_dropdown.value
+        instances = InstanceDAO.get_all()
+        for inst in instances:
+            if str(inst.id) == str(selected_id):
+                self.selected_instance = inst
+                self.status_text.value = f"Instancia activa: {inst.name}"
+                self.page.update()
+                break
 
     def manage_play_click(self, e):
-        version = self.version_dropdown.value
-        self.play_button.disabled = True
-        self.page.update()
+        if not self.selected_instance:
+            self.update_status("Error: No hay ninguna instancia seleccionada.")
+            return
 
-        # Ejecutamos el servicio en un hilo separado para no congelar la UI de Flet
+        instance_name = self.selected_instance.name
+        minecraft_version = self.selected_instance.minecraft_version
+        loader_type = self.selected_instance.loader_type
+
+        self.play_button.disabled = True
+        self.update()
+
         def second_plane_task():
             try:
-                self.launcher_service.prepare_and_launch(version, self.update_status)
+                self.launcher_service.launch_or_reinstall_instance(
+                    instance_name=instance_name,
+                    username=self.username,
+                    minecraft_version=minecraft_version,
+                    loader_type=loader_type,
+                    callback=self.update_status
+                )
+            except Exception as ex:
+                self.update_status(f"Error crítico: {str(ex)}")
             finally:
                 self.play_button.disabled = False
-                self.page.update()
+                # Actualización segura al finalizar el hilo
+                try:
+                    self.update()
+                except Exception:
+                    if self.page:
+                        self.page.update()
                 
         threading.Thread(target=second_plane_task).start()

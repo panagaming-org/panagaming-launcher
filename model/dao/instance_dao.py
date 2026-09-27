@@ -2,7 +2,6 @@ from model.entity.instance import InstanceModel
 from sqlalchemy.orm import Session
 from storage.data.database import SessionLocal
 
-
 class InstanceDAO:
 
     @staticmethod
@@ -13,7 +12,7 @@ class InstanceDAO:
         return instances
 
     @staticmethod
-    def get_by_name(name: str):
+    def get_by_name(name: str) -> list:
         db = SessionLocal()
         instance = db.query(InstanceModel).filter(InstanceModel.name == name).first()
         return instance
@@ -31,7 +30,7 @@ class InstanceDAO:
         db.refresh(db_instance)
 
     @staticmethod
-    def delete_instance(name: str):
+    def delete_instance(name: str) -> bool:
         db = SessionLocal()
         instance = db.query(InstanceModel).filter(InstanceModel.name == name).first()
         if instance:
@@ -42,3 +41,9 @@ class InstanceDAO:
         db.close()
         return False
 
+    @staticmethod
+    def get_selected_instance() -> InstanceModel:
+        db = SessionLocal()
+        selected_instance = db.query(InstanceModel).filter(InstanceModel.selected == True).first()
+        db.close()
+        return selected_instance

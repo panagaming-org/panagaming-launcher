@@ -1,5 +1,5 @@
 from storage.data.database import Base
-from sqlalchemy import Column, Integer, String, DateTime
+from sqlalchemy import Column, Integer, String, DateTime, Boolean
 from datetime import datetime
 
 class InstanceModel(Base):
@@ -11,5 +11,4 @@ class InstanceModel(Base):
     loader_type = Column(String, nullable=False)  # "vanilla", "forge", "fabric"
     loader_version = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
-
-    
+    selected = Column(Boolean, default=False, nullable=False)

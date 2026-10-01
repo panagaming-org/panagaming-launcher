@@ -18,7 +18,8 @@ class InstanceDAO:
         return instance
 
     @staticmethod
-    def create_instance(db: Session, name: str, minecraft_version: str, loader_type: str, loader_version: str = None):
+    def create_instance(name: str, minecraft_version: str, loader_type: str, loader_version: str = None):
+        db = SessionLocal()
         db_instance = InstanceModel(
             name=name,
             minecraft_version=minecraft_version,

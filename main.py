@@ -6,8 +6,8 @@ from storage.data.database import init_db, get_db
 
 def main(page: ft.Page):
     page.title = "PanaGaming Launcher"
-    page.window.width = 1050
-    page.window.height = 800
+    page.window.width = 1450
+    page.window.height = 1000
     page.window.resizable = False
     page.bgcolor = "#0f172a"  # Fondo oscuro cyberpunk
 

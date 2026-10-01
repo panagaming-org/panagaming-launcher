@@ -150,6 +150,7 @@ class HomeView(ft.Container):
                     callback=self.update_status
                 )
             except Exception as ex:
+                print(ex)
                 self.update_status(f"Error crítico: {str(ex)}")
             finally:
                 self.play_button.disabled = False

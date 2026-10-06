@@ -1,9 +1,12 @@
 import platform
 import os
 import shutil
-from pathlib import Path
 import minecraft_launcher_lib
 import subprocess
+import requests
+import urllib.request
+import zipfile
+from pathlib import Path
 from model.dao.instance_dao import InstanceDAO
 from model.entity.instance import InstanceModel
 
@@ -44,7 +47,7 @@ class LauncherService:
             )
 
             if callback:
-                callback(f"Instancia '{safe_name}' creada y registrada en la base de datos.")
+                callback(f"Instancia '{name}' creada y registrada en la base de datos.")
             return True
         except Exception as e:
             if callback:
@@ -80,21 +83,22 @@ class LauncherService:
 
     def launch_instance(self, instance_name: str, username: str, minecraft_version: str, callback=None):
         instance_dir = os.path.join(self.base_dir, instance_name)
-        
         versions_dir = os.path.join(instance_dir, "versions")
-
-        print(instance_dir)
         
         if not os.path.exists(versions_dir):
+            msg = "Error: No se encontró la carpeta 'versions' en la instancia."
+            print(f"[ERROR] {msg}")
             if callback:
-                callback("Error: No se encontró la carpeta 'versions' en la instancia.")
+                callback(msg)
             return
 
         installed_subdirs = [d for d in os.listdir(versions_dir) if os.path.isdir(os.path.join(versions_dir, d))]
         
         if not installed_subdirs:
+            msg = "Error: No hay versiones instaladas en el directorio."
+            print(f"[ERROR] {msg}")
             if callback:
-                callback("Error: No hay versiones instaladas en el directorio.")
+                callback(msg)
             return
 
         version_id = installed_subdirs[0]
@@ -103,23 +107,20 @@ class LauncherService:
                 version_id = sub
                 break
 
-        # 🔍 CORRECCIÓN ROBUSTA PARA EL ARCHIVO JSON DE FORGE
+        # 🔍 CORRECCIÓN ROBUSTA: Validamos que json_files no esté vacío para evitar el 'list index out of range'
         sub_path = os.path.join(versions_dir, version_id)
         os.makedirs(sub_path, exist_ok=True)
         
         version_json_path = os.path.join(sub_path, f"{version_id}.json")
         
         if not os.path.exists(version_json_path):
-            # Buscar cualquier archivo .json existente en la subcarpeta
             json_files = [f for f in os.listdir(sub_path) if f.endswith(".json")]
             if json_files:
                 import shutil
                 source_json = os.path.join(sub_path, json_files[0])
-                # Si el archivo se llama diferente, lo copiamos con el nombre exacto que espera la librería
                 if json_files[0] != f"{version_id}.json":
                     shutil.copy(source_json, version_json_path)
             else:
-                # Si no existe ningún JSON, creamos uno básico de respaldo para Forge
                 import json
                 basic_json_data = {
                     "id": version_id,
@@ -133,34 +134,14 @@ class LauncherService:
                 with open(version_json_path, "w", encoding="utf-8") as f:
                     json.dump(basic_json_data, f, indent=4)
 
-        print(f"--> ID de versión detectado directamente en disco: {version_id}")
-
         if callback:
-            callback(f"Configurando entorno Java para {version_id}...")
+            callback(f"Verificando entorno Java para la instancia...")
 
-        # Definir si la versión de Minecraft requiere Java 8 (versiones antiguas) o Java moderno (1.17+)
-        is_old_version = (
-            minecraft_version.startswith("1.7") or 
-            minecraft_version.startswith("1.8") or 
-            minecraft_version.startswith("1.6") or 
-            minecraft_version.startswith("1.12")
-        )
-        
-        java_executable = None
-        if is_old_version:
-            # Versiones antiguas requieren estrictamente Java 8
-            java_executable = self._find_java_8()
-        else:
-            # Versiones modernas (como 1.20.1) requieren Java 17+ gestionado por la librería
-            try:
-                minecraft_launcher_lib.runtime.install_jvm_runtime(minecraft_version, instance_dir)
-                java_executable = minecraft_launcher_lib.runtime.get_executable_path(minecraft_version, instance_dir)
-            except Exception as e:
-                print(f"No se pudo instalar el runtime JVM automático: {e}")
-
-        # Validación final de respaldo
+        # Descargar y configurar automáticamente el Java ideal dentro de la carpeta de la instancia
+        java_executable = self._download_and_setup_java(instance_dir, minecraft_version)
         if not java_executable or not os.path.exists(java_executable):
             java_executable = "java"
+            print("[ADVERTENCIA] No se encontró el Java portable, usando el comando global 'java'.")
 
         options = {
             "username": username,
@@ -171,37 +152,71 @@ class LauncherService:
         }
 
         try:
+            # 1. Obtener el comando base de la librería
             command = minecraft_launcher_lib.command.get_minecraft_command(
                 version=version_id,
                 minecraft_directory=instance_dir,
                 options=options
             )
+            
+            fixed_command = []
+            skip_next = False
+            
+            for arg in command:
+                if skip_next:
+                    # Si venimos de -cp, -Djava.library.path, --add-exports o --add-opens:
+                    # Verificamos si es una ruta de archivos real o un módulo de Java.
+                    # Los módulos de Java tienen '/' y '=' (ej: java.base/sun.security.util=...) y NO son rutas de disco.
+                    if "/" in arg and ("=" in arg or not os.path.exists(arg.split(";")[0])):
+                        fixed_command.append(arg)  # Lo dejamos intacto con sus barras '/'
+                    else:
+                        fixed_command.append(arg.replace("/", os.sep))  # Es una ruta de archivo de Windows
+                    skip_next = False
+                elif arg in ["-cp", "-Djava.library.path", "--add-exports", "--add-opens"]:
+                    fixed_command.append(arg)
+                    skip_next = True
+                elif arg.startswith("-"):
+                    fixed_command.append(arg)
+                else:
+                    fixed_command.append(arg.replace("/", os.sep))
+            
+            command = fixed_command
+
+            print(f"--> Comando final listo para ejecutar.")
 
             if callback:
                 callback(f"¡Lanzando Minecraft ({instance_name})!")
 
+            print(f"--> Comando corregido ejecutado: {' '.join(command)}")
+
+            # 2. Lanzar el proceso con el comando corregido
             process = subprocess.Popen(
                 command, 
                 stdout=subprocess.PIPE, 
-                stderr=subprocess.STDOUT, 
+                stderr=subprocess.PIPE, 
                 text=True
             )
+            
+            # (El resto de tu lógica para leer la salida...)
 
+            # Hilo para imprimir en tiempo real los errores y logs de Java por pantalla
             def monitor_minecraft():
                 for line in process.stdout:
                     print(f"[Minecraft Output] {line.strip()}")
 
             import threading
             threading.Thread(target=monitor_minecraft, daemon=True).start()
-            
+
         except Exception as e:
+            error_msg = f"Error al iniciar el proceso: {str(e)}"
+            print(f"[EXCEPCIÓN CRÍTICA] {error_msg}")
             if callback:
-                callback(f"Error al iniciar: {str(e)}")
+                callback(error_msg)
             raise e
+            
 
     def launch_or_reinstall_instance(self, instance_name: str, username: str, minecraft_version: str, loader_type: str, callback):
-        safe_name = "".join(c for c in instance_name if c.isalnum() or c in (' ', '_', '-')).strip().replace(" ", "_")
-        instance_dir = os.path.join(self.base_dir, safe_name)
+        instance_dir = os.path.join(self.base_dir, instance_name)
 
         installed_version = []
         if os.path.exists(instance_dir):
@@ -212,12 +227,20 @@ class LauncherService:
                 callback(f"La instancia '{instance_name}' no se encontró en disco. Instalando...")
 
             os.makedirs(instance_dir, exist_ok=True)
+            
             if loader_type.lower() == "forge":
+                if callback:
+                    callback(f"Instalando versión base de Minecraft {minecraft_version}...")
+                # 1. PRIMERO instalamos el Minecraft base (indispensable para Forge)
+                minecraft_launcher_lib.install.install_minecraft_version(minecraft_version, instance_dir)
+                
+                if callback:
+                    callback(f"Buscando e instalando Forge...")
                 forge_ver = minecraft_launcher_lib.forge.find_forge_version(minecraft_version)
-                print(f"Forge: {forge_ver}")
-                print(instance_dir)
                 minecraft_launcher_lib.forge.install_forge_version(forge_ver, instance_dir)
             else:
+                if callback:
+                    callback(f"Instalando Minecraft {minecraft_version} (Vanilla)...")
                 minecraft_launcher_lib.install.install_minecraft_version(minecraft_version, instance_dir)
 
             if callback:
@@ -225,21 +248,65 @@ class LauncherService:
 
         self.launch_instance(instance_name, username, minecraft_version=minecraft_version, callback=callback)
 
-    def _find_java_8(self):
-        """Busca específicamente Java 8 en el equipo para tolerar versiones antiguas como 1.7.10"""
-        import shutil
-        # Intenta buscar el comando java general, pero idealmente busca rutas comunes de Java 8 en Windows
-        if platform.system() == "Windows":
-            paths_to_check = [
-                r"C:\Program Files\Java\jdk1.8.0_*\bin\java.exe",
-                r"C:\Program Files\Java\jre1.8.0_*\bin\java.exe",
-                r"C:\Program Files (x86)\Java\jdk1.8.0_*\bin\java.exe",
-                r"C:\Program Files (x86)\Java\jre1.8.0_*\bin\java.exe",
-                r"C:\Clementine\Java\..." # Rutas personalizadas si las hubiera
-            ]
-            import glob
-            for pattern in paths_to_check:
-                matches = glob.glob(pattern)
-                if matches:
-                    return matches[0]
-        return shutil.which("java") or "java"
+    
+    def _download_and_setup_java(self, instance_dir: str, minecraft_version: str) -> str:
+        """
+        Descarga automáticamente un JDK portable en la carpeta raíz de la instancia 
+        (dentro de 'java_runtime') y devuelve la ruta del ejecutable java.exe.
+        """
+        java_folder = os.path.join(instance_dir, "java_runtime")
+        
+        # Si ya fue descargado anteriormente, reutilizamos su ruta directamente
+        if os.path.exists(java_folder):
+            found = list(Path(java_folder).glob("**/bin/java.exe"))
+            if found:
+                return str(found[0])
+
+        # Decidir si necesita Java 8 (versiones antiguas) o Java 17 (versiones modernas)
+        is_old_version = (
+            minecraft_version.startswith("1.7") or 
+            minecraft_version.startswith("1.8") or 
+            minecraft_version.startswith("1.6") or 
+            minecraft_version.startswith("1.12")
+        )
+        java_major = "8" if is_old_version else "21"
+        
+        # Enlace oficial de Eclipse Adoptium para Windows x64
+        api_url = f"https://api.adoptium.net/v3/binary/latest/{java_major}/ga/windows/x64/jdk/hotspot/normal/eclipse"
+        zip_path = os.path.join(instance_dir, f"java_{java_major}.zip")
+        
+        print(f"📥 Descargando Java {java_major} portable para la instancia...")
+        try:
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+            response = requests.get(api_url, headers=headers, stream=True)
+            
+            if response.status_code == 200:
+                with open(zip_path, "wb") as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+            else:
+                raise Exception(f"Error HTTP: {response.status_code}")
+            
+            print(f"📦 Descomprimiendo Java {java_major}...")
+            os.makedirs(java_folder, exist_ok=True)
+            
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(java_folder)
+                
+            # Borrar el archivo .zip para ahorrar espacio en disco
+            if os.path.exists(zip_path):
+                os.remove(zip_path)
+                
+            # Encontrar el ejecutable dentro de la carpeta descomprimida
+            found = list(Path(java_folder).glob("**/bin/java.exe"))
+            if found:
+                java_exe = str(found[0])
+                print(f"✅ ¡Java portable listo en la instancia!: {java_exe}")
+                return java_exe
+                
+        except Exception as e:
+            print(f"❌ Error al configurar Java automáticamente: {e}")
+            
+        return None
+
+    

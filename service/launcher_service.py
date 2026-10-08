@@ -197,8 +197,6 @@ class LauncherService:
                 text=True
             )
             
-            # (El resto de tu lógica para leer la salida...)
-
             # Hilo para imprimir en tiempo real los errores y logs de Java por pantalla
             def monitor_minecraft():
                 for line in process.stdout:
@@ -207,13 +205,21 @@ class LauncherService:
             import threading
             threading.Thread(target=monitor_minecraft, daemon=True).start()
 
+            if callback:
+                callback(f"¡Minecraft ({instance_name}) está en ejecución!")
+
+            # 🛑 CLAVE: Esperar aquí a que el proceso de Minecraft termine (se cierre el juego)
+            process.wait()
+
+            if callback:
+                callback("El juego se ha cerrado.")
+
         except Exception as e:
             error_msg = f"Error al iniciar el proceso: {str(e)}"
             print(f"[EXCEPCIÓN CRÍTICA] {error_msg}")
             if callback:
                 callback(error_msg)
             raise e
-            
 
     def launch_or_reinstall_instance(self, instance_name: str, username: str, minecraft_version: str, loader_type: str, callback):
         instance_dir = os.path.join(self.base_dir, instance_name)
@@ -309,4 +315,21 @@ class LauncherService:
             
         return None
 
-    
+    def delete_instance(self, instance_name: str, callback=None) -> bool:
+        try:
+            instance_dir = os.path.join(self.base_dir, instance_name)
+            if os.path.exists(instance_dir):
+                shutil.rmtree(instance_dir)
+                if callback:
+                    callback(f"Los archivos de la instancia '{instance_name}' fueron eliminados correctamente.")
+                InstanceDAO.delete_instance(instance_name)
+                return True
+            else:
+                if callback:
+                    callback(f"No se encontró la carpeta de la instancia '{instance_name}' en disco.")
+                InstanceDAO.delete_instance(instance_name)
+                return False
+        except Exception as e:
+            if callback:
+                callback(f"Error al eliminar la instancia '{instance_name}': {str(e)}")
+            return False

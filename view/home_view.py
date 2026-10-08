@@ -5,16 +5,17 @@ from service.launcher_service import LauncherService
 from model.dao.instance_dao import InstanceDAO
 
 class HomeView(ft.Container):
-    def __init__(self, page: ft.Page):
+    def __init__(self, page: ft.Page, on_game_state_changed=None):
         super().__init__()
         self.page = page
         self.launcher_service = LauncherService()
+        self.on_game_state_changed = on_game_state_changed
         self.expand = True
         self.padding = 20
         self.instance_dao = InstanceDAO()
         self.username = "IKERO90"
         
-        # Obtenemos datos directamente del DAO sin pasar sesiones externas
+        # 1. Obtener la instancia seleccionada o la primera disponible
         self.selected_instance = getattr(self.instance_dao, "get_selected_instance", lambda: None)()
         
         if not self.selected_instance:
@@ -24,9 +25,10 @@ class HomeView(ft.Container):
         inst_name = self.selected_instance.name if self.selected_instance else "Ninguna instancia seleccionada"
         self.status_text = ft.Text(f"Instancia activa: {inst_name}", size=12, color=ft.Colors.WHITE54)
 
+        # 2. Cargar opciones del desplegable desde la base de datos
         instances_list = InstanceDAO.get_all()
         dropdown_options = []
-        default_value = "1.20"
+        default_value = None
 
         if instances_list:
             for inst in instances_list:
@@ -36,7 +38,8 @@ class HomeView(ft.Container):
             if self.selected_instance:
                 default_value = str(self.selected_instance.id)
         else:
-            dropdown_options.append(ft.dropdown.Option("1.20", "1.20 (Vanilla por defecto)"))
+            dropdown_options.append(ft.dropdown.Option(text="No hay instancias creadas", key="none"))
+            default_value = "none"
 
         self.version_dropdown = ft.Dropdown(
             label="Instancia / Versión",
@@ -57,6 +60,45 @@ class HomeView(ft.Container):
             width=160,
             height=45,
             on_click=self.manage_play_click
+        )
+
+        # 3. Componentes de la consola central de ejecución
+        self.logs_view = ft.ListView(
+            expand=True,
+            spacing=5,
+            auto_scroll=True,
+            padding=10
+        )
+        
+        self.console_container = ft.Container(
+            content=self.logs_view,
+            bgcolor="#0f172a",
+            border_radius=8,
+            border=ft.border.all(1, "#334155"),
+            padding=10,
+            expand=True,
+            visible=False  # Se oculta al iniciar, aparece al presionar Jugar
+        )
+
+        self.title_text = ft.Text("PANAGAMING LAUNCHER", size=26, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE)
+
+        # Contenedor central dinámico que alterna entre el título y la consola
+        self.center_content_area = ft.Container(
+            expand=True, 
+            bgcolor="#1e293b", 
+            border_radius=12, 
+            border=ft.border.all(1, "#334155"), 
+            padding=30, 
+            alignment=ft.alignment.center,
+            content=ft.Column(
+                alignment=ft.MainAxisAlignment.CENTER, 
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER, 
+                spacing=15,
+                controls=[
+                    self.title_text,
+                    self.console_container
+                ]
+            )
         )
 
         bottom_bar = ft.Container(
@@ -95,23 +137,17 @@ class HomeView(ft.Container):
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
             expand=True,
             controls=[
-                ft.Container(
-                    expand=True, bgcolor="#1e293b", border_radius=12,
-                    border=ft.border.all(1, "#334155"), padding=30,
-                    alignment=ft.alignment.center,
-                    content=ft.Column(
-                        alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=15,
-                        controls=[
-                            ft.Text("PANAGAMING LAUNCHER", size=26, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
-                        ]
-                    )
-                ),
+                self.center_content_area,
                 bottom_bar
             ]
         )
 
     def update_status(self, mensaje: str):
+        """Callback que añade cada mensaje del servicio a la consola visual en pantalla."""
         self.status_text.value = mensaje
+        self.logs_view.controls.append(
+            ft.Text(mensaje, size=12, color=ft.Colors.WHITE70, font_family="Consolas")
+        )
         try:
             self.page.update()
         except Exception:
@@ -120,6 +156,8 @@ class HomeView(ft.Container):
 
     def on_instance_changed(self, e):
         selected_id = self.version_dropdown.value
+        if selected_id == "none":
+            return
         instances = InstanceDAO.get_all()
         for inst in instances:
             if str(inst.id) == str(selected_id):
@@ -133,32 +171,41 @@ class HomeView(ft.Container):
             self.update_status("Error: No hay ninguna instancia seleccionada.")
             return
 
-        instance_name = self.selected_instance.name
-        minecraft_version = self.selected_instance.minecraft_version
-        loader_type = self.selected_instance.loader_type
+        version = self.selected_instance.minecraft_version
 
+        # 1. Deshabilitar botón de jugar y bloquear menú superior
         self.play_button.disabled = True
-        self.update()
+        self.play_button.content = ft.Text("JUGANDO...", size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.BLACK)
+        self.play_button.bgcolor = ft.Colors.ORANGE_700
+        
+        if self.on_game_state_changed:
+            self.on_game_state_changed(True)  # Bloquea las pestañas de arriba
+            
+        self.page.update()
 
         def second_plane_task():
             try:
-                self.launcher_service.launch_or_reinstall_instance(
-                    instance_name=instance_name,
-                    username=self.username,
-                    minecraft_version=minecraft_version,
-                    loader_type=loader_type,
+                self.launcher_service.launch_instance(
+                    instance_name=self.selected_instance.name,
+                    username="PanaPlayer", # O tu variable de usuario actual
+                    minecraft_version=version,
                     callback=self.update_status
                 )
             except Exception as ex:
-                print(ex)
-                self.update_status(f"Error crítico: {str(ex)}")
+                self.update_status(f"Error: {str(ex)}")
             finally:
+                # 2. Restaurar botón y desbloquear menú superior al cerrar Minecraft
                 self.play_button.disabled = False
-                # Actualización segura al finalizar el hilo
-                try:
-                    self.update()
-                except Exception:
-                    if self.page:
-                        self.page.update()
+                self.play_button.content = ft.Text("JUGAR", size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.BLACK)
+                self.play_button.bgcolor = "#22c55e"
                 
-        threading.Thread(target=second_plane_task).start()
+                if self.on_game_state_changed:
+                    self.on_game_state_changed(False) # Habilita de nuevo las pestañas
+                    
+                self.page.update()
+
+        threading.Thread(target=second_plane_task, daemon=True).start()
+
+    def update_status(self, msg):
+        self.status_text.value = msg
+        self.page.update()

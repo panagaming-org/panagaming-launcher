@@ -1,6 +1,7 @@
 import flet as ft
 from service.launcher_service import LauncherService
 from service.versions_service import VersionsService
+from service.device_service import DeviceService
 
 class CreateInstanceView(ft.Container):
     def __init__(self, page: ft.Page, on_back_callback=None):
@@ -9,10 +10,14 @@ class CreateInstanceView(ft.Container):
         self.page = page
         self.on_back_callback = on_back_callback
         self.launcher_service = LauncherService()
+        self.versions_service = VersionsService()
+        self.device_service = DeviceService()
 
         self.expand = True
         self.padding = 20
         self.bgcolor = "#0f172a"
+
+        minecraft_versions = self.versions_service.get_minecraft_versions()
 
         # --- Campos del Formulario con colores de texto corregidos ---
         self.input_name = ft.TextField(
@@ -25,17 +30,39 @@ class CreateInstanceView(ft.Container):
             border_color="#334155",
             focused_border_color="#3c8527"
         )
+
+
+        self.dropdown_ram = ft.Dropdown(
+            label="Memoria RAM",
+            label_style=ft.TextStyle(color=ft.Colors.WHITE70),
+            value="2048",
+            text_style=ft.TextStyle(color=ft.Colors.WHITE),
+            border_color="#334155",
+            focused_border_color="#3c8527",
+            options=[
+                ft.dropdown.Option(text=f"{ram} MB", key=str(ram)) 
+                for ram in range(512, self.device_service.get_ram_number() + 1, 512)
+            ],
+            dense=True
+        )
         
-        self.input_version = ft.TextField(
+        self.version_dropdown = ft.Dropdown(
             label="Versión de Minecraft",
             label_style=ft.TextStyle(color=ft.Colors.WHITE70),
-            value="1.7.10",
-            hint_text="Ej. 1.20.4",
+            value="1.7.10", # Valor predeterminado (asegúrate de que exista en la lista o usa el primero)
+            hint_text="Selecciona una versión",
             hint_style=ft.TextStyle(color=ft.Colors.WHITE38),
             bgcolor="#1e293b",
             color=ft.Colors.WHITE,
+            text_style=ft.TextStyle(color=ft.Colors.WHITE),
             border_color="#334155",
-            focused_border_color="#3c8527"
+            focused_border_color="#3c8527",
+            options=[
+                ft.dropdown.Option(
+                    text=v["id"], 
+                    content=ft.Text(v["id"], color=ft.Colors.WHITE)
+                ) for v in minecraft_versions
+            ]
         )
         
         self.dropdown_loader = ft.Dropdown(
@@ -43,16 +70,17 @@ class CreateInstanceView(ft.Container):
             label_style=ft.TextStyle(color=ft.Colors.WHITE70),
             value="vanilla",
             bgcolor="#1e293b",
-            color=ft.Colors.WHITE,
+            color=ft.Colors.WHITE,  # Color del texto seleccionado
+            text_style=ft.TextStyle(color=ft.Colors.WHITE),  # Asegura que las opciones del menú desplieguen en blanco
             border_color="#334155",
             focused_border_color="#3c8527",
             options=[
-                ft.dropdown.Option("vanilla"),
-                ft.dropdown.Option("forge"),
+                ft.dropdown.Option(text="vanilla", content=ft.Text("vanilla", color=ft.Colors.WHITE)),
+                ft.dropdown.Option(text="forge", content=ft.Text("forge", color=ft.Colors.WHITE)),
             ],
             on_change=self.toggle_loader_fields
         )
-        
+                
         self.input_forge_version = ft.TextField(
             label="Versión de Forge (Opcional)",
             label_style=ft.TextStyle(color=ft.Colors.WHITE70),
@@ -99,8 +127,14 @@ class CreateInstanceView(ft.Container):
                         spacing=15,
                         controls=[
                             self.input_name,
-                            self.input_version,
-                            self.dropdown_loader,
+                            ft.Row(
+                                spacing=10,
+                                controls=[
+                                    self.version_dropdown,
+                                    self.dropdown_ram,
+                                    self.dropdown_loader
+                                ]
+                            ),
                             self.input_forge_version,
                             ft.Divider(height=10, color="#334155"),
                             self.status_text,
@@ -135,7 +169,7 @@ class CreateInstanceView(ft.Container):
     def execute_creation(self, e):
         """Ejecuta la lógica de creación utilizando el LauncherService."""
         name = self.input_name.value.strip()
-        version = self.input_version.value.strip()
+        version = self.version_dropdown.value.strip()
         loader = self.dropdown_loader.value
         forge_ver = self.input_forge_version.value.strip() if self.input_forge_version.visible else None
 

@@ -9,14 +9,15 @@ import zipfile
 from pathlib import Path
 from model.dao.instance_dao import InstanceDAO
 from model.entity.instance import InstanceModel
-
 from storage.data.database import SessionLocal
-# ... (demás imports que ya tienes como pathlib, os, minecraft_launcher_lib, etc.)
+from service.device_service import DeviceService
 
 class LauncherService:
+
     def __init__(self):
         self.minecraft_dir = Path.home() / ".minecraft"
         self.base_dir = os.path.join(os.getcwd(), "instances")
+        self.device_service = DeviceService()
         os.makedirs(self.base_dir, exist_ok=True)
 
     # (El método prepare_and_launch se mantiene igual...)
@@ -24,8 +25,10 @@ class LauncherService:
         """
         Crea la carpeta aislada, instala Vanilla o Forge y registra los datos en la base de datos usando el DAO.
         """
+        directory_name = self._get_safe_name(name)
+
         # Limpiar el nombre para usarlo de forma segura como una carpeta (evitando caracteres raros)
-        instance_dir = os.path.join(self.base_dir, name)
+        instance_dir = os.path.join(self.base_dir, directory_name)
         os.makedirs(instance_dir, exist_ok=True)
 
         try:
@@ -43,7 +46,8 @@ class LauncherService:
                 name=name,
                 minecraft_version=minecraft_version,
                 loader_type=loader_type,
-                loader_version=final_loader_version
+                loader_version=final_loader_version,
+                directory_name=directory_name
             )
 
             if callback:
@@ -63,9 +67,8 @@ class LauncherService:
             instances = []
             
             for inst in db_instances:
-                # Opcional: Revalidar que la carpeta física todavía exista en el disco
-                safe_name = "".join(c for c in inst.name if c.isalnum() or c in (' ', '_', '-')).strip().replace(" ", "_")
-                inst_path = os.path.join(self.base_dir, safe_name)
+                
+                inst_path = os.path.join(self.base_dir, inst.folder_name)
                 
                 instances.append({
                     "name": inst.name,
@@ -81,8 +84,9 @@ class LauncherService:
             print(f"Error al obtener instancias: {str(e)}")
             return []
 
-    def launch_instance(self, instance_name: str, username: str, minecraft_version: str, callback=None):
-        instance_dir = os.path.join(self.base_dir, instance_name)
+    def launch_instance(self, instance_name: str, username: str, ram_param: str, minecraft_version: str, directory_name: str, callback=None):
+        print(directory_name)
+        instance_dir = os.path.join(self.base_dir, directory_name)
         versions_dir = os.path.join(instance_dir, "versions")
         
         if not os.path.exists(versions_dir):
@@ -142,13 +146,13 @@ class LauncherService:
         if not java_executable or not os.path.exists(java_executable):
             java_executable = "java"
             print("[ADVERTENCIA] No se encontró el Java portable, usando el comando global 'java'.")
-
+        
         options = {
             "username": username,
             "uuid": "",
             "token": "",
             "executablePath": java_executable,
-            "jvmArguments": ["-Xmx2G", "-XX:+UseG1GC"]
+            "jvmArguments": [ram_param, "-XX:+UseG1GC"]
         }
 
         try:
@@ -197,10 +201,13 @@ class LauncherService:
                 text=True
             )
             
-            # Hilo para imprimir en tiempo real los errores y logs de Java por pantalla
+            # Hilo para imprimir en la terminal Y enviar los logs del juego a la interfaz de Flet en tiempo real
             def monitor_minecraft():
                 for line in process.stdout:
-                    print(f"[Minecraft Output] {line.strip()}")
+                    line_str = line.strip()
+                    print(f"[Minecraft Output] {line_str}")
+                    if callback:
+                        callback(f"[Minecraft] {line_str}")
 
             import threading
             threading.Thread(target=monitor_minecraft, daemon=True).start()
@@ -208,7 +215,7 @@ class LauncherService:
             if callback:
                 callback(f"¡Minecraft ({instance_name}) está en ejecución!")
 
-            # 🛑 CLAVE: Esperar aquí a que el proceso de Minecraft termine (se cierre el juego)
+            # Esperar a que el proceso termine (mantiene el botón bloqueado mientras juegas)
             process.wait()
 
             if callback:
@@ -221,8 +228,10 @@ class LauncherService:
                 callback(error_msg)
             raise e
 
-    def launch_or_reinstall_instance(self, instance_name: str, username: str, minecraft_version: str, loader_type: str, callback):
-        instance_dir = os.path.join(self.base_dir, instance_name)
+    def launch_or_reinstall_instance(self, instance_name: str, username: str, minecraft_version: str, loader_type: str, ram: int, directory_name: str, callback):
+        instance_dir = os.path.join(self.base_dir, directory_name)
+
+        args_ram = DeviceService.format_ram_argument(ram)
 
         installed_version = []
         if os.path.exists(instance_dir):
@@ -252,8 +261,7 @@ class LauncherService:
             if callback:
                 callback("¡Instalación completada con éxito!")
 
-        self.launch_instance(instance_name, username, minecraft_version=minecraft_version, callback=callback)
-
+        self.launch_instance(instance_name, username, args_ram, minecraft_version=minecraft_version, directory_name=directory_name, callback=callback)
     
     def _download_and_setup_java(self, instance_dir: str, minecraft_version: str) -> str:
         """
@@ -317,7 +325,8 @@ class LauncherService:
 
     def delete_instance(self, instance_name: str, callback=None) -> bool:
         try:
-            instance_dir = os.path.join(self.base_dir, instance_name)
+            instance = InstanceDAO.get_by_name(instance_name)
+            instance_dir = os.path.join(self.base_dir, instance.folder_name)
             if os.path.exists(instance_dir):
                 shutil.rmtree(instance_dir)
                 if callback:
@@ -333,3 +342,14 @@ class LauncherService:
             if callback:
                 callback(f"Error al eliminar la instancia '{instance_name}': {str(e)}")
             return False
+
+    def _get_safe_name(self, name: str) -> str:
+        """
+        Limpia el nombre de la instancia para que sea una ruta de directorio 
+        válida y segura en Windows (eliminando caracteres prohibidos como *, :, etc.).
+        """
+        # Caracteres prohibidos en Windows: < > : " / \ | ? *
+        forbidden_chars = '<>:"/\\|?*'
+        cleaned = "".join(c for c in name if c not in forbidden_chars)
+        # Reemplazar espacios por guiones bajos y limpiar espacios extremos
+        return cleaned.strip().replace(" ", "_")

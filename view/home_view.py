@@ -142,14 +142,26 @@ class HomeView(ft.Container):
             ]
         )
 
-    def update_status(self, mensaje: str):
-        """Callback que añade cada mensaje del servicio a la consola visual en pantalla."""
-        self.status_text.value = mensaje
+    def update_status(self, message: str):
+        # 1. Hacer visible el contenedor de la consola si estaba oculto
+        if not self.console_container.visible:
+            self.console_container.visible = True
+            
+        # 2. Ocultar el banner de bienvenida para dejar espacio exclusivo a los logs
+        if hasattr(self, 'welcome_banner') and self.welcome_banner:
+            self.welcome_banner.visible = False
+
+        if hasattr(self, 'title_text') and self.title_text:
+            self.title_text.visible = False
+
+        # 3. Añadir la línea de texto al ListView con estilo de consola clásica
         self.logs_view.controls.append(
-            ft.Text(mensaje, size=12, color=ft.Colors.WHITE70, font_family="Consolas")
+            ft.Text(message, size=12, color=ft.Colors.GREEN_ACCENT, font_family="Consolas")
         )
+        
+        # 4. Actualizar la interfaz de forma segura
         try:
-            self.page.update()
+            self.update()
         except Exception:
             if self.page:
                 self.page.update()
@@ -185,10 +197,13 @@ class HomeView(ft.Container):
 
         def second_plane_task():
             try:
-                self.launcher_service.launch_instance(
+                self.launcher_service.launch_or_reinstall_instance(
                     instance_name=self.selected_instance.name,
                     username="PanaPlayer", # O tu variable de usuario actual
                     minecraft_version=version,
+                    loader_type=self.selected_instance.loader_type,
+                    ram=self.selected_instance.ram,
+                    directory_name=self.selected_instance.folder_name,
                     callback=self.update_status
                 )
             except Exception as ex:
@@ -205,7 +220,3 @@ class HomeView(ft.Container):
                 self.page.update()
 
         threading.Thread(target=second_plane_task, daemon=True).start()
-
-    def update_status(self, msg):
-        self.status_text.value = msg
-        self.page.update()

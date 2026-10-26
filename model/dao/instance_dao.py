@@ -18,13 +18,15 @@ class InstanceDAO:
         return instance
 
     @staticmethod
-    def create_instance(name: str, minecraft_version: str, loader_type: str, loader_version: str = None):
+    def create_instance(name: str, minecraft_version: str, loader_type: str, loader_version: str = None, ram: int = 2048, directory_name: str = None):
         db = SessionLocal()
         db_instance = InstanceModel(
             name=name,
             minecraft_version=minecraft_version,
             loader_type=loader_type,
-            loader_version=loader_version
+            loader_version=loader_version,
+            folder_name=directory_name,
+            ram=ram
         )
         db.add(db_instance)
         db.commit()
@@ -48,3 +50,10 @@ class InstanceDAO:
         selected_instance = db.query(InstanceModel).filter(InstanceModel.selected == True).first()
         db.close()
         return selected_instance
+
+    @staticmethod
+    def get_ram_by_instance_name(name: str) -> int:
+        db = SessionLocal()
+        instance = db.query(InstanceModel).filter(InstanceModel.name == name).first()
+        ram = instance.ram
+        

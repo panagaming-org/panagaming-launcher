@@ -11,4 +11,6 @@ class InstanceModel(Base):
     loader_type = Column(String, nullable=False)  # "vanilla", "forge", "fabric"
     loader_version = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    folder_name = Column(String, unique=True)
+    ram = Column(Integer, default=2048)  # RAM en MB
     selected = Column(Boolean, default=False, nullable=False)

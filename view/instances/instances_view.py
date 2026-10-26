@@ -1,8 +1,9 @@
+import os
+import subprocess
 import flet as ft
 import threading
 from view.instances.create_instance_view import CreateInstanceView
 from model.dao.instance_dao import InstanceDAO
-from storage.data.database import SessionLocal
 from service.launcher_service import LauncherService
 
 class InstancesView(ft.Container):
@@ -23,10 +24,8 @@ class InstancesView(ft.Container):
             instance_cards.append(ft.Text("No hay instancias creadas aún.", italic=True, color=ft.Colors.GREY))
         else:
             for inst in instances_data:
-                version_text = f"{inst.minecraft_version} ({inst.loader_type})"
                 card = self._create_instance_card(
-                    name=inst.name,
-                    version=version_text,
+                    instance=inst
                 )
                 instance_cards.append(card)
 
@@ -62,8 +61,33 @@ class InstancesView(ft.Container):
             ]
         )
 
-    def _create_instance_card(self, name, version):
+    def _create_instance_card(self, instance):
         """Método auxiliar para generar tarjetas de instancia estilizadas de forma limpia."""
+        action_controls = [
+            ft.TextButton(
+                "Configurar",
+                icon=ft.Icons.SETTINGS,
+                icon_color=ft.Colors.WHITE,
+                style=ft.ButtonStyle(color=ft.Colors.WHITE)
+            ),
+            ft.IconButton(
+                icon=ft.Icons.DELETE,
+                icon_color=ft.Colors.RED_400,
+                tooltip="Eliminar",
+                on_click=lambda e: self.open_delete_dialog(name_instance=instance.name)
+            ),
+        ]
+
+        loader_type = getattr(instance, "loader_type", "").lower()
+        if loader_type == "forge":
+            # Añadimos el botón de Mods en primera posición o donde prefieras dentro de la fila
+            action_controls.insert(0, ft.IconButton(
+                icon=ft.Icons.FOLDER_OPEN,
+                icon_color=ft.Colors.AMBER_400,
+                tooltip="Abrir carpeta de Mods",
+                on_click=lambda e, folder_name=instance.folder_name: self.open_mods_folder(folder_name)
+            ))
+
         return ft.Container(
             bgcolor="#1e293b",
             padding=15,
@@ -76,22 +100,25 @@ class InstancesView(ft.Container):
                     ft.Column(
                         spacing=5,
                         controls=[
-                            ft.Text(name, size=16, weight="bold", color=ft.Colors.WHITE),
+                            ft.Text(instance.name, size=16, weight="bold", color=ft.Colors.WHITE),
                             ft.Row(
                                 spacing=15,
                                 controls=[
-                                    ft.Text(f"Versión: {version}", size=12, color=ft.Colors.WHITE70),
+                                    ft.Text(f"Versión: {instance.minecraft_version}", size=12, color=ft.Colors.WHITE70),
+                                    ft.Container(
+                                        padding=ft.padding.symmetric(horizontal=6, vertical=2),
+                                        border_radius=4,
+                                        bgcolor="#334155",
+                                        content=ft.Text(loader_type.upper(), size=10, color=ft.Colors.WHITE)
+                                    )
                                 ]
                             )
                         ]
                     ),
-                    # Botones de acción
+                    # Botones de acción dinámicos
                     ft.Row(
-                        spacing=10,
-                        controls=[
-                            ft.TextButton("Configurar", icon=ft.Icons.SETTINGS, icon_color=ft.Colors.WHITE, style=ft.ButtonStyle(color=ft.Colors.WHITE)),
-                            ft.IconButton(icon=ft.Icons.DELETE, icon_color=ft.Colors.RED_400, tooltip="Eliminar", on_click=lambda e: self.open_delete_dialog(name_instance=name))
-                        ]
+                        spacing=5,
+                        controls=action_controls
                     )
                 ]
             )
@@ -114,6 +141,17 @@ class InstancesView(ft.Container):
         self.launcher_service.delete_instance(name_instance)
         self.page.update()
 
+    def open_mods_folder(self, folder_name):
+        # Ruta base donde se guardan las instancias (ajusta self.launcher_service.base_dir según corresponda)
+        base_dir = getattr(self.launcher_service, "base_dir", "instances") # Cambia por tu ruta base si es distinta
+        
+        mods_dir = os.path.join(base_dir, folder_name, "mods")
+        
+        # Si la carpeta mods no existe todavía, la creamos para evitar errores al abrirla
+        os.makedirs(mods_dir, exist_ok=True)
+        
+        # Abrir la carpeta en el explorador de archivos (Windows)
+        subprocess.Popen(f'explorer "{os.path.realpath(mods_dir)}"')
 
     def open_delete_dialog(self, name_instance: str):
         """Abre un diálogo modal para confirmar la eliminación de la instancia."""

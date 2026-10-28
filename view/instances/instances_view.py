@@ -81,12 +81,21 @@ class InstancesView(ft.Container):
         loader_type = getattr(instance, "loader_type", "").lower()
         if loader_type == "forge":
             # Añadimos el botón de Mods en primera posición o donde prefieras dentro de la fila
-            action_controls.insert(0, ft.IconButton(
+            action_controls.insert(0, ft.TextButton(
+                "Mods",
                 icon=ft.Icons.FOLDER_OPEN,
-                icon_color=ft.Colors.AMBER_400,
-                tooltip="Abrir carpeta de Mods",
+                style=ft.ButtonStyle(color=ft.Colors.AMBER),
                 on_click=lambda e, folder_name=instance.folder_name: self.open_mods_folder(folder_name)
             ))
+
+        action_controls.insert(0, ft.TextButton(
+                "Texturas",
+                icon=ft.Icons.FOLDER_OPEN,
+                icon_color=ft.Colors.AMBER,
+                style=ft.ButtonStyle(color=ft.Colors.AMBER),
+                on_click=lambda e, folder_name=instance.folder_name: self.open_source_pack_folder(folder_name) 
+            )
+        )
 
         return ft.Container(
             bgcolor="#1e293b",
@@ -144,7 +153,6 @@ class InstancesView(ft.Container):
     def open_mods_folder(self, folder_name):
         # Ruta base donde se guardan las instancias (ajusta self.launcher_service.base_dir según corresponda)
         base_dir = getattr(self.launcher_service, "base_dir", "instances") # Cambia por tu ruta base si es distinta
-        
         mods_dir = os.path.join(base_dir, folder_name, "mods")
         
         # Si la carpeta mods no existe todavía, la creamos para evitar errores al abrirla
@@ -152,6 +160,14 @@ class InstancesView(ft.Container):
         
         # Abrir la carpeta en el explorador de archivos (Windows)
         subprocess.Popen(f'explorer "{os.path.realpath(mods_dir)}"')
+
+    def open_source_pack_folder(self, folder_name):
+        base_dir = getattr(self.launcher_service, "base_dir", "instances")
+        resourcepack_dir = os.path.join(base_dir, folder_name, "resourcepacks")
+
+        os.makedirs(resourcepack_dir, exist_ok=True)
+
+        subprocess.Popen(f'explorer "{os.path.realpath(resourcepack_dir)}"')
 
     def open_delete_dialog(self, name_instance: str):
         """Abre un diálogo modal para confirmar la eliminación de la instancia."""
